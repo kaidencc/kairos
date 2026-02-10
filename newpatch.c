@@ -584,3 +584,77 @@ int unlock_nvram(struct iboot64_img* iboot_in) {
 	write_opcode(iboot_in->buf,appleSystemFuncBegin+4,retInsn);
 	return 0;
 }
+
+/*
+ * freshnonce_patch
+ *
+ * Ported from ibootpatchfinder64_base.cpp (libpatchfinder)
+ * Copyright (c) 2019 tihmstar
+ * Licensed under LGPL-2.1
+ *
+ * Logic adapted from C++ to C by kaiden.cc
+ */
+int freshnonce_patch(struct iboot64_img* iboot_in) {
+	// 1. Find "com.apple.System.boot-nonce"
+	void* nonce_str_loc = memmem(iboot_in->buf, iboot_in->len, "com.apple.System.boot-nonce", strlen("com.apple.System.boot-nonce"));
+	if (!nonce_str_loc) {
+		printf("[-] Could not find boot-nonce string\n");
+		return -1;
+	}
+
+	// 2. Find reference to string
+	uint64_t noncevar_ref = iboot64_ref(iboot_in, nonce_str_loc);
+	if (!noncevar_ref) {
+		printf("[-] Could not find boot-nonce xref\n");
+		return -1;
+	}
+
+	// 3. Find start of Function 1
+	uint64_t noncefun1 = bof64(iboot_in->buf, 0, noncevar_ref);
+	if (!noncefun1) {
+		printf("[-] Could not find noncefun1 start\n");
+		return -1;
+	}
+
+	// 4. Find call to Function 1
+	uint64_t noncefun1_call = xref64code(iboot_in->buf, 0, iboot_in->len, noncefun1);
+	if (!noncefun1_call) {
+		printf("[-] Could not find call to noncefun1\n");
+		return -1;
+	}
+
+	// 5. Find start of Function 2 (which calls Function 1)
+	uint64_t noncefun2 = bof64(iboot_in->buf, 0, noncefun1_call);
+	if (!noncefun2) {
+		printf("[-] Could not find noncefun2 start\n");
+		return -1;
+	}
+
+	// 6. Find call to Function 2
+	uint64_t noncefun2_call = xref64code(iboot_in->buf, 0, iboot_in->len, noncefun2);
+	if (!noncefun2_call) {
+		printf("[-] Could not find call to noncefun2\n");
+		return -1;
+	}
+
+	// 7. Patch the branch instruction immediately preceding the call
+	// In raw offsets, this is 4 bytes before the call.
+	uint64_t branch_to_patch = noncefun2_call - 4;
+
+	// Sanity check: ensure it is actually a branch instruction
+	uint32_t insn = *(uint32_t*)(iboot_in->buf + branch_to_patch);
+
+	if ((insn & 0xFC000000) == 0x54000000 || // b.cond
+		(insn & 0xFC000000) == 0x14000000 || // b
+		(insn & 0x7E000000) == 0x34000000 || // cbz/cbnz
+		(insn & 0x7E000000) == 0x36000000)   // tbz/tbnz
+	{
+		printf("[+] Patching freshnonce at 0x%llx (insn: 0x%08x)\n", branch_to_patch + iboot_in->base, insn);
+		// Write NOP (0xD503201F)
+		*(uint32_t*)(iboot_in->buf + branch_to_patch) = 0xD503201F;
+		return 0;
+	} else {
+		printf("[-] Instruction at 0x%llx is not a recognized branch (0x%08x)\n", branch_to_patch + iboot_in->base, insn);
+		return -1;
+	}
+}

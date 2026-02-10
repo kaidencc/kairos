@@ -17,7 +17,7 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with kairos.  If not, see <https://www.gnu.org/licenses/>.
-*/
+ */
 
 #include "newpatch.h"
 
@@ -27,10 +27,12 @@ int main(int argc, char* argv[]) {
 		printf("Options:\n\t-b [args]\t\tset boot-args\n");
 		printf("\t-c [cmd] [location]\trelocate command handler\n");
 		printf("\t-n\t\t\tunlock nvram\n");
-		printf("\nExample usage:\n%s iBEC.dec iBEC.patched -n -b \"-v debug=0x09\" -c \"go\" 0x830000300\n",argv[0]);
+		// [CHANGE 1] Add help text for the new flag
+		printf("\t-f\t\t\tapply freshnonce patch\n");
+		printf("\nExample usage:\n%s iBEC.dec iBEC.patched -n -f -b \"-v debug=0x09\" -c \"go\" 0x830000300\n",argv[0]);
 		return -1;
 	}
-	
+
 	char* inFile = argv[1];
 	char* outFile = argv[2];
 	char* bootArgs = NULL;
@@ -40,6 +42,8 @@ int main(int argc, char* argv[]) {
 	int ret = 0;
 	memset(&iboot_in, 0, sizeof(iboot_in));
 	bool doNvramUnlock = false;
+	// [CHANGE 2] Add a boolean flag for freshnonce
+	bool doFreshNonce = false;
 
 	if(argc > 3) {
 		for(int i = 1; i < argc; i++) {
@@ -51,6 +55,10 @@ int main(int argc, char* argv[]) {
 			}
 			if(strncmp(argv[i],"-n",2) == 0) {
 				doNvramUnlock = true;
+			}
+			// [CHANGE 3] Parse the -f argument
+			if(strncmp(argv[i],"-f",2) == 0) {
+				doFreshNonce = true;
 			}
 		}
 	}
@@ -78,7 +86,7 @@ int main(int argc, char* argv[]) {
 		return -1;
 	}
 	LOG("Base address: 0x%llx\n",get_iboot64_base_address(&iboot_in));
-    bool pac = iboot64_pac_check(&iboot_in);
+	bool pac = iboot64_pac_check(&iboot_in);
 	if(has_kernel_load_k(&iboot_in)) {
 		LOG("Does have kernel load\n");
 		if(bootArgs) {
@@ -106,6 +114,15 @@ int main(int argc, char* argv[]) {
 				WARN("Failed to unlock nvram\n");
 		}
 	}
+
+	// [CHANGE 4] Actually call the freshnonce function
+	if (doFreshNonce) {
+		LOG("Patching freshnonce...\n");
+		ret = freshnonce_patch(&iboot_in);
+		if(ret < 0)
+			WARN("Failed to patch freshnonce\n");
+	}
+
 	LOG("Patching out RSA signature check...\n");
 	ret = rsa_sigcheck_patch(&iboot_in, pac);
 	if(ret < 0)
